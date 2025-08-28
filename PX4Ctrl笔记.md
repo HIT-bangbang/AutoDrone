@@ -132,9 +132,9 @@ Desired_State_t PX4CtrlFSM::get_rotor_speed_up_des(const ros::Time now)
 
 PX4Ctrl 的摇杆(ch1~ch4)逻辑为美国手
 
-ch5(aux_1) 用于切换 PX4Ctrl 的飞行模式，高值为 `AUTO_HOVER` 模式，低值为 `CMD_CTRL`。所以在 `ego-planner` 轨迹规划失败，但是定位没飘的时候，可以将 ch5(aux_1) 打到高位，切换到悬停模式
+ch5(aux_1) 用于在紧急情况下强制切换为 `MANUAL_CTRL` 模式。高位时，飞控退出 offboard 模式返回 stablized 模式（PX4Ctrl 处于 `MANUAL_CTRL` 模式），由飞手和飞控控制无人机。切换为低位时,由机载计算机 PX4Ctrl 控制无人机，飞控处于 offboard 模式。
 
-ch6(aux_2) 代码中叫做离合器 (gear)，非常形象的命名。ch6(aux_2) 为高位时，由 PX4Ctrl 机载计算机控制无人机，飞控处于 offboard 模式。切换为低位时，断开`离合器`，由飞手和飞控控制无人机，飞控退出 offboard 模式返回 `MANUAL_CTRL` 模式。 
+ch6(aux_2) 代码中叫做离合器 (gear)，非常形象的命名。用于紧急情况下将 PX4Ctrl 强制切换为 `AUTO_HOVER` 模式。高位时断开"离合器"，进入 `AUTO_HOVER` 模式，低值为闭合离合器，此时机载计算机可以通过mavlink 控制无人机，即 `CMD_CTRL` 模式。所以在 `ego-planner` 轨迹规划失败，但是定位没飘的时候，可以将 ch6(aux_2) 打到高位，切换到悬停模式
 
 ch7(aux_3) 用于重启飞控，打到高位则向飞控发送重启指令
 
