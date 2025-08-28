@@ -4,12 +4,22 @@ using namespace std;
 
 
 
+/**
+ * @brief: 从四元数计算 yaw 角
+ * @param {Quaterniond} q
+ * @return {*}
+ */
 double LinearControl::fromQuaternion2yaw(Eigen::Quaterniond q)
 {
   double yaw = atan2(2 * (q.x()*q.y() + q.w()*q.z()), q.w()*q.w() + q.x()*q.x() - q.y()*q.y() - q.z()*q.z());
   return yaw;
 }
 
+/**
+ * @brief: 构造函数
+ * @param {Parameter_t} &param
+ * @return {*}
+ */
 LinearControl::LinearControl(Parameter_t &param) : param_(param)
 {
   resetThrustMapping();
@@ -97,6 +107,13 @@ LinearControl::computeDesiredCollectiveThrustSignal(
   return throttle_percentage;
 }
 
+
+/**
+ * @brief: AUTO_HOVER 和 CMD_CTRL 模式下，更新油门占空比和无人机加速度之间的比率 thr2acc_
+ * @param {Vector3d} &est_a
+ * @param {Parameter_t} &param
+ * @return {*}
+ */
 bool 
 LinearControl::estimateThrustModel(
     const Eigen::Vector3d &est_a,
@@ -129,6 +146,7 @@ LinearControl::estimateThrustModel(
     /***********************************/
     /* Model: est_a(2) = thr1acc_ * thr */
     /***********************************/
+    //* 目测是一个简单的卡尔曼滤波器，用于估计 thr2acc_
     double gamma = 1 / (rho2_ + thr * P_ * thr);
     double K = gamma * P_ * thr;
     thr2acc_ = thr2acc_ + K * (est_a(2) - thr * thr2acc_);
