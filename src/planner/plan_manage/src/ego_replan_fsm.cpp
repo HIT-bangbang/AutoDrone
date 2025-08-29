@@ -4,14 +4,21 @@
 namespace ego_planner
 {
 
+  /**
+   * @brief: 初始化
+   * @param {NodeHandle} &nh ros节点句柄
+   * @return {*}
+   */
   void EGOReplanFSM::init(ros::NodeHandle &nh)
   {
+    //* 初始化路径点和一些标志位
     current_wp_ = 0;
     exec_state_ = FSM_EXEC_STATE::INIT;
     have_target_ = false;
     have_odom_ = false;
     have_recv_pre_agent_ = false;
 
+    //* 从参数服务器加载状态机的参数
     /*  fsm param  */
     nh.param("fsm/flight_type", target_type_, -1);
     nh.param("fsm/thresh_replan_time", replan_thresh_, -1.0);
@@ -32,6 +39,7 @@ namespace ego_planner
       nh.param("fsm/waypoint" + to_string(i) + "_z", waypoints_[i][2], -1.0);
     }
 
+    //* 实例化 PlanningVisualization 和 EGOPlannerManager，并初始化
     /* initialize main modules */
     visualization_.reset(new PlanningVisualization(nh));
     planner_manager_.reset(new EGOPlannerManager);
@@ -40,31 +48,40 @@ namespace ego_planner
     planner_manager_->setDroneIdtoOpt();
 
     /* callback */
+    // 创建定时器：exec_timer_，每10ms进入一次回调函数 execFSMCallback() ，用于状态机处理
     exec_timer_ = nh.createTimer(ros::Duration(0.01), &EGOReplanFSM::execFSMCallback, this);
+    // 创建定时器：safety_timer_，每50ms进入一次回调函数checkCollisionCallback()
     safety_timer_ = nh.createTimer(ros::Duration(0.05), &EGOReplanFSM::checkCollisionCallback, this);
 
+    // 创建订阅者odmo_sub_，订阅里程计数据
     odom_sub_ = nh.subscribe("odom_world", 1, &EGOReplanFSM::odometryCallback, this);
 
+    // 飞机id大于等于1，表示swarm
     if (planner_manager_->pp_.drone_id >= 1)
     {
       string sub_topic_name = string("/drone_") + std::to_string(planner_manager_->pp_.drone_id - 1) + string("_planning/swarm_trajs");
+      // 从 /drone_(id-1)_planning/swarm_trajs上订阅集群轨迹
       swarm_trajs_sub_ = nh.subscribe(sub_topic_name.c_str(), 10, &EGOReplanFSM::swarmTrajsCallback, this, ros::TransportHints().tcpNoDelay());
     }
     string pub_topic_name = string("/drone_") + std::to_string(planner_manager_->pp_.drone_id) + string("_planning/swarm_trajs");
+    // 将traj_utils::MultiBsplines 类型数据发布到/drone_(id)_planning/swarm_trajs话题上
     swarm_trajs_pub_ = nh.advertise<traj_utils::MultiBsplines>(pub_topic_name.c_str(), 10);
 
-    broadcast_bspline_pub_ = nh.advertise<traj_utils::Bspline>("planning/broadcast_bspline_from_planner", 10);
-    broadcast_bspline_sub_ = nh.subscribe("planning/broadcast_bspline_to_planner", 100, &EGOReplanFSM::BroadcastBsplineCallback, this, ros::TransportHints().tcpNoDelay());
+    broadcast_bspline_pub_ = nh.advertise<traj_utils::Bspline>("planning/broadcast_bspline_from_planner", 10);  // 将traj_utils::Bsplines 类型数据发布到/planning/broadcast_bspline_from_planner话题上
+    broadcast_bspline_sub_ = nh.subscribe("planning/broadcast_bspline_to_planner", 100, &EGOReplanFSM::BroadcastBsplineCallback, this, ros::TransportHints().tcpNoDelay());// 从/planning/broadcast_bspline_to_planner话题上订阅数据
 
-    bspline_pub_ = nh.advertise<traj_utils::Bspline>("planning/bspline", 10);
-    data_disp_pub_ = nh.advertise<traj_utils::DataDisp>("planning/data_display", 100);
+    // 以下两个话题用于发布数据给 traj_server
+    bspline_pub_ = nh.advertise<traj_utils::Bspline>("planning/bspline", 10);   //将traj_utils::Bsplines 类型数据发布到/planning/bspline话题上
+    data_disp_pub_ = nh.advertise<traj_utils::DataDisp>("planning/data_display", 100);  //将traj_utils::DataDisp 类型数据发布到/planning/data_display话题上
 
     if (target_type_ == TARGET_TYPE::MANUAL_TARGET)
     {
+      //* 手动选目标点模式，在 rviz 中手动点一个目标点，rviz 发出 /move_base_simple/goal 话题。收到该话题后开始轨迹规划
       waypoint_sub_ = nh.subscribe("/move_base_simple/goal", 1, &EGOReplanFSM::waypointCallback, this);
     }
     else if (target_type_ == TARGET_TYPE::PRESET_TARGET)
     {
+      //* 预设目标点模式，预先设置好目标点。PX4Ctrl 在无人机准备就绪后发布 /traj_start_trigger。收到该话题后开始轨迹规划
       trigger_sub_ = nh.subscribe("/traj_start_trigger", 1, &EGOReplanFSM::triggerCallback, this);
 
       ROS_INFO("Wait for 1 second.");
@@ -77,18 +94,24 @@ namespace ego_planner
 
       ROS_WARN("Waiting for trigger from [n3ctrl] from RC");
 
+      // 预设目标点模式下 odom_ 和 trigger_ 信号必须同时收到了才可以进行轨迹规划。
       while (ros::ok() && (!have_odom_ || !have_trigger_))
       {
         ros::spinOnce();
         ros::Duration(0.001).sleep();
       }
 
+      //* 处理yaml参数文件中预设好的 waypoints
       readGivenWps();
     }
     else
       cout << "Wrong target_type_ value! target_type_=" << target_type_ << endl;
   }
 
+  /**
+   * @brief: 处理 waypoints
+   * @return {*}
+   */
   void EGOReplanFSM::readGivenWps()
   {
     if (waypoint_num_ <= 0)
@@ -111,12 +134,14 @@ namespace ego_planner
     //   odom_pos_, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(),
     //   wps_, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
 
+    // 可视化
     for (size_t i = 0; i < (size_t)waypoint_num_; i++)
     {
       visualization_->displayGoalPoint(wps_[i], Eigen::Vector4d(0, 0.5, 0.5, 1), 0.3, i);
       ros::Duration(0.001).sleep();
     }
 
+    // 从第一个 waypoint 开始，进行轨迹规划
     // plan first global waypoint
     wp_id_ = 0;
     planNextWaypoint(wps_[wp_id_]);
@@ -201,6 +226,11 @@ namespace ego_planner
     }
   }
 
+  /**
+   * @brief: PX4Ctrl 在无人机准备就绪后发布 /traj_start_trigger。收到该话题后，使用预先设置的waypoint进行轨迹规划
+   * @param {PoseStampedPtr} &msg
+   * @return {*}
+   */
   void EGOReplanFSM::triggerCallback(const geometry_msgs::PoseStampedPtr &msg)
   {
     have_trigger_ = true;
@@ -208,6 +238,11 @@ namespace ego_planner
     init_pt_ = odom_pos_;
   }
 
+  /**
+   * @brief: 收到 rviz 中选择目标点工具发布的 "/move_base_simple/goal" 话题后，开始轨迹规划
+   * @param {PoseStampedPtr} &msg
+   * @return {*}
+   */
   void EGOReplanFSM::waypointCallback(const geometry_msgs::PoseStampedPtr &msg)
   {
     if (msg->pose.position.z < -0.1)
@@ -217,7 +252,7 @@ namespace ego_planner
     // trigger_ = true;
     init_pt_ = odom_pos_;
 
-    Eigen::Vector3d end_wp(msg->pose.position.x, msg->pose.position.y, 1.0);
+    Eigen::Vector3d end_wp(msg->pose.position.x, msg->pose.position.y, 1.0);    // 目标点
 
     planNextWaypoint(end_wp);
   }

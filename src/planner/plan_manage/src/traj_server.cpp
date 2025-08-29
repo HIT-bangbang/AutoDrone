@@ -24,18 +24,25 @@ int traj_id_;
 double last_yaw_, last_yaw_dot_;
 double time_forward_;
 
+/**
+ * @brief: 订阅 "planning/bspline" 的回调函数
+ * @param {BsplineConstPtr} msg ego-planner 生成的轨迹
+ * @return {*}
+ */
 void bsplineCallback(traj_utils::BsplineConstPtr msg)
 {
   // parse pos traj
-
+  //创建两个变量 pos_pts 和 konts，分别用于存放geometry_msgs/Point[]类型的 pos_pts 和时间konts
   Eigen::MatrixXd pos_pts(3, msg->pos_pts.size());
-
   Eigen::VectorXd knots(msg->knots.size());
+
+  // 从收到的轨迹消息中，取出所有轨迹点的 konts
   for (size_t i = 0; i < msg->knots.size(); ++i)
   {
     knots(i) = msg->knots[i];
   }
 
+  //  从收到的轨迹消息中，取出所有轨迹点的 pos_pts
   for (size_t i = 0; i < msg->pos_pts.size(); ++i)
   {
     pos_pts(0, i) = msg->pos_pts[i].x;
@@ -43,6 +50,7 @@ void bsplineCallback(traj_utils::BsplineConstPtr msg)
     pos_pts(2, i) = msg->pos_pts[i].z;
   }
 
+  // 用收到的pos_pts，konts创建新的均匀B样条曲线 pos_traj
   UniformBspline pos_traj(pos_pts, msg->order, 0.1);
   pos_traj.setKnot(knots);
 
@@ -68,6 +76,14 @@ void bsplineCallback(traj_utils::BsplineConstPtr msg)
   receive_traj_ = true;
 }
 
+/**
+ * @brief: 计算yaw和yaw_dot，并将角度转换到区间[-PI，PI]
+ * @param {double} t_cur
+ * @param {Vector3d} &pos
+ * @param {Time} &time_now
+ * @param {Time} &time_last
+ * @return {*}
+ */
 std::pair<double, double> calculate_yaw(double t_cur, Eigen::Vector3d &pos, ros::Time &time_now, ros::Time &time_last)
 {
   constexpr double PI = 3.1415926;
@@ -163,9 +179,11 @@ std::pair<double, double> calculate_yaw(double t_cur, Eigen::Vector3d &pos, ros:
 void cmdCallback(const ros::TimerEvent &e)
 {
   /* no publishing before receive traj_ */
+  // 没有收到轨迹，跳出函数
   if (!receive_traj_)
     return;
 
+  // 计算当前时刻和起始时刻的间隔
   ros::Time time_now = ros::Time::now();
   double t_cur = (time_now - start_time_).toSec();
 
@@ -173,8 +191,10 @@ void cmdCallback(const ros::TimerEvent &e)
   std::pair<double, double> yaw_yawdot(0, 0);
 
   static ros::Time time_last = ros::Time::now();
+  // 判断 t_cur  在不在总时间区间内
   if (t_cur < traj_duration_ && t_cur >= 0.0)
   {
+    //计算当前时刻(t_cur) 的pos vel acc yaw
     pos = traj_[0].evaluateDeBoorT(t_cur);
     vel = traj_[1].evaluateDeBoorT(t_cur);
     acc = traj_[2].evaluateDeBoorT(t_cur);
@@ -184,10 +204,11 @@ void cmdCallback(const ros::TimerEvent &e)
     /*** calculate yaw ***/
 
     double tf = min(traj_duration_, t_cur + 2.0);
-    pos_f = traj_[0].evaluateDeBoorT(tf);
+    pos_f = traj_[0].evaluateDeBoorT(tf);           //? 不知道做什么用
   }
   else if (t_cur >= traj_duration_)
   {
+    // 计算终点的pos，将 vel 和 acc 设置为0，yaw不变
     /* hover when finish traj_ */
     pos = traj_[0].evaluateDeBoorT(traj_duration_);
     vel.setZero();
@@ -203,6 +224,7 @@ void cmdCallback(const ros::TimerEvent &e)
   {
     cout << "[Traj server]: invalid time." << endl;
   }
+  // 将 pos vel acc yaw 等信息装填到 cmd 里，由 pos_cmd_pub 发布到 /position_cmd
   time_last = time_now;
 
   cmd.header.stamp = time_now;
@@ -236,12 +258,16 @@ int main(int argc, char **argv)
   // ros::NodeHandle node;
   ros::NodeHandle nh("~");
 
+  // 订阅 ego-planner 发布的轨迹
   ros::Subscriber bspline_sub = nh.subscribe("planning/bspline", 10, bsplineCallback);
 
+  // 发布 "/position_cmd" 话题，与 PX4Ctrl 中接收此消息并用于无人机控制
   pos_cmd_pub = nh.advertise<quadrotor_msgs::PositionCommand>("/position_cmd", 50);
 
+  // 定时器，100hz
   ros::Timer cmd_timer = nh.createTimer(ros::Duration(0.01), cmdCallback);
 
+  // 在 pos_cmd_pub 要发布的 cmd 消息中填充控制器增益系数
   /* control parameter */
   cmd.kx[0] = pos_gain[0];
   cmd.kx[1] = pos_gain[1];

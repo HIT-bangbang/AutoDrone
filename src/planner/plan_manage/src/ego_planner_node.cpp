@@ -11,9 +11,9 @@ int main(int argc, char **argv)
   ros::init(argc, argv, "ego_planner_node");
   ros::NodeHandle nh("~");
 
-  EGOReplanFSM rebo_replan;
+  EGOReplanFSM rebo_replan; // 实例化ego_planner状态机：repo_replan
 
-  rebo_replan.init(nh);
+  rebo_replan.init(nh);     // 初始化
 
   // ros::Duration(1.0).sleep();
   ros::spin();
