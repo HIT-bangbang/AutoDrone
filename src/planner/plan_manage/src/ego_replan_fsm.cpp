@@ -48,9 +48,9 @@ namespace ego_planner
     planner_manager_->setDroneIdtoOpt();
 
     /* callback */
-    // 创建定时器：exec_timer_，每10ms进入一次回调函数 execFSMCallback() ，用于状态机处理
+    // 创建定时器：exec_timer_，100hz频率唤起回调函数 execFSMCallback() ，用于状态机处理
     exec_timer_ = nh.createTimer(ros::Duration(0.01), &EGOReplanFSM::execFSMCallback, this);
-    // 创建定时器：safety_timer_，每50ms进入一次回调函数checkCollisionCallback()
+    // 创建定时器：safety_timer_，20hz频率唤起回调函数checkCollisionCallback()
     safety_timer_ = nh.createTimer(ros::Duration(0.05), &EGOReplanFSM::checkCollisionCallback, this);
 
     // 创建订阅者odmo_sub_，订阅里程计数据
@@ -63,16 +63,15 @@ namespace ego_planner
       // 从 /drone_(id-1)_planning/swarm_trajs上订阅集群轨迹
       swarm_trajs_sub_ = nh.subscribe(sub_topic_name.c_str(), 10, &EGOReplanFSM::swarmTrajsCallback, this, ros::TransportHints().tcpNoDelay());
     }
-    string pub_topic_name = string("/drone_") + std::to_string(planner_manager_->pp_.drone_id) + string("_planning/swarm_trajs");
+    string pub_topic_name = string("/drone_") + std::to_string(planner_manager_->pp_.drone_id) + string("_planning/swarm_trajs");   // drone_(id)_planning/swarm_trajs
     // 将traj_utils::MultiBsplines 类型数据发布到/drone_(id)_planning/swarm_trajs话题上
     swarm_trajs_pub_ = nh.advertise<traj_utils::MultiBsplines>(pub_topic_name.c_str(), 10);
 
     broadcast_bspline_pub_ = nh.advertise<traj_utils::Bspline>("planning/broadcast_bspline_from_planner", 10);  // 将traj_utils::Bsplines 类型数据发布到/planning/broadcast_bspline_from_planner话题上
     broadcast_bspline_sub_ = nh.subscribe("planning/broadcast_bspline_to_planner", 100, &EGOReplanFSM::BroadcastBsplineCallback, this, ros::TransportHints().tcpNoDelay());// 从/planning/broadcast_bspline_to_planner话题上订阅数据
 
-    // 以下两个话题用于发布数据给 traj_server
-    bspline_pub_ = nh.advertise<traj_utils::Bspline>("planning/bspline", 10);   //将traj_utils::Bsplines 类型数据发布到/planning/bspline话题上
-    data_disp_pub_ = nh.advertise<traj_utils::DataDisp>("planning/data_display", 100);  //将traj_utils::DataDisp 类型数据发布到/planning/data_display话题上
+    bspline_pub_ = nh.advertise<traj_utils::Bspline>("planning/bspline", 10);   // 发布轨迹给 traj_server
+    data_disp_pub_ = nh.advertise<traj_utils::DataDisp>("planning/data_display", 100);  // 可视化
 
     if (target_type_ == TARGET_TYPE::MANUAL_TARGET)
     {
@@ -101,7 +100,7 @@ namespace ego_planner
         ros::Duration(0.001).sleep();
       }
 
-      //* 处理yaml参数文件中预设好的 waypoints
+      //* 读取并处理yaml参数文件中预设好的 waypoints，从第一个开始轨迹规划
       readGivenWps();
     }
     else
@@ -109,7 +108,7 @@ namespace ego_planner
   }
 
   /**
-   * @brief: 处理 waypoints
+   * @brief: 读取并处理yaml参数文件中预设好的 waypoints，从第一个开始轨迹规划
    * @return {*}
    */
   void EGOReplanFSM::readGivenWps()
@@ -437,6 +436,12 @@ namespace ego_planner
     have_recv_pre_agent_ = true;
   }
 
+  /**
+   * @brief: 切换状态机的状态
+   * @param {FSM_EXEC_STATE} new_state 新的状态
+   * @param {string} pos_call 
+   * @return {*}
+   */
   void EGOReplanFSM::changeFSMExecState(FSM_EXEC_STATE new_state, string pos_call)
   {
 
@@ -456,6 +461,10 @@ namespace ego_planner
     return std::pair<int, FSM_EXEC_STATE>(continously_called_times_, exec_state_);
   }
 
+  /**
+   * @brief: 打印状态机当前所处的的状态
+   * @return {*}
+   */
   void EGOReplanFSM::printFSMExecState()
   {
     static string state_str[8] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START"};
@@ -463,13 +472,18 @@ namespace ego_planner
     cout << "[FSM]: state: " + state_str[int(exec_state_)] << endl;
   }
 
+  /**
+   * @brief: 状态机处理，使用ROS定时器触发，100hz
+   * @param {TimerEvent} &e
+   * @return {*}
+   */
   void EGOReplanFSM::execFSMCallback(const ros::TimerEvent &e)
   {
     exec_timer_.stop(); // To avoid blockage
 
     static int fsm_num = 0;
     fsm_num++;
-    if (fsm_num == 100)
+    if (fsm_num == 100)     // 检查是否有拿到了odom消息和目标点，超时时间 = 0.01 * 100 = 1s 
     {
       printFSMExecState();
       if (!have_odom_)
@@ -479,22 +493,23 @@ namespace ego_planner
       fsm_num = 0;
     }
 
+    // 状态机
     switch (exec_state_)
     {
     case INIT:
     {
       if (!have_odom_)
       {
-        goto force_return;
+        goto force_return;  // 没有odmo_数据，goto force_return跳转到函数末尾
         // return;
       }
-      changeFSMExecState(WAIT_TARGET, "FSM");
+      changeFSMExecState(WAIT_TARGET, "FSM");   // INIT --> WAIT_TARGET
       break;
     }
 
     case WAIT_TARGET:
     {
-      if (!have_target_ || !have_trigger_)
+      if (!have_target_ || !have_trigger_)      // 再次检查，没有收到目标点或没有收到触发则 goto force_return
         goto force_return;
       // return;
       else
@@ -505,7 +520,7 @@ namespace ego_planner
         // }
         // else
         // {
-        changeFSMExecState(SEQUENTIAL_START, "FSM");
+        changeFSMExecState(SEQUENTIAL_START, "FSM");    // WAIT_TARGET --> SEQUENTIAL_START
         // }
       }
       break;
@@ -514,6 +529,7 @@ namespace ego_planner
     case SEQUENTIAL_START: // for swarm
     {
       // cout << "id=" << planner_manager_->pp_.drone_id << " have_recv_pre_agent_=" << have_recv_pre_agent_ << endl;
+      // swarm_trajs_sub_的回调函数末尾会把have_recv_pre_agent_置1
       if (planner_manager_->pp_.drone_id <= 0 || (planner_manager_->pp_.drone_id >= 1 && have_recv_pre_agent_))
       {
         if (have_odom_ && have_target_ && have_trigger_)
@@ -521,7 +537,7 @@ namespace ego_planner
           bool success = planFromGlobalTraj(10); // zx-todo
           if (success)
           {
-            changeFSMExecState(EXEC_TRAJ, "FSM");
+            changeFSMExecState(EXEC_TRAJ, "FSM");   //SEQUENTIAL_START --> EXEC_TRAJ
 
             publishSwarmTrajs(true);
           }
@@ -550,7 +566,7 @@ namespace ego_planner
       bool success = planFromGlobalTraj(10); // zx-todo
       if (success)
       {
-        changeFSMExecState(EXEC_TRAJ, "FSM");
+        changeFSMExecState(EXEC_TRAJ, "FSM");   // GEN_NEW_TRAJ --> EXEC_TRAJ
         flag_escape_emergency_ = true;
         publishSwarmTrajs(false);
       }
@@ -577,49 +593,52 @@ namespace ego_planner
       break;
     }
 
+    //* 执行轨迹
     case EXEC_TRAJ:
     {
       /* determine if need to replan */
-      LocalTrajData *info = &planner_manager_->local_data_;
+      LocalTrajData *info = &planner_manager_->local_data_; //planner_manager 中 updateTrajInfo 方法用于更新 local_data_
       ros::Time time_now = ros::Time::now();
-      double t_cur = (time_now - info->start_time_).toSec();
-      t_cur = min(info->duration_, t_cur);
+      double t_cur = (time_now - info->start_time_).toSec();    // 计算当前时间和局部轨迹开始时间之差t_cur
+      t_cur = min(info->duration_, t_cur);  // 要是t_cur超过了局部轨迹的总时间，则将 t_cur 赋值为局部轨迹的总时间
 
-      Eigen::Vector3d pos = info->position_traj_.evaluateDeBoorT(t_cur);
+      Eigen::Vector3d pos = info->position_traj_.evaluateDeBoorT(t_cur);    // 计算t_cur时刻局部轨迹期望的位置坐标 pos
 
+      // 预设点模式，且 1.没规划完最后一个点，2.当前位置距离end_pt_小于停止重规划距离阈值(no_replan_thresh)
       /* && (end_pt_ - pos).norm() < 0.5 */
       if ((target_type_ == TARGET_TYPE::PRESET_TARGET) &&
           (wp_id_ < waypoint_num_ - 1) &&
           (end_pt_ - pos).norm() < no_replan_thresh_)
       {
         wp_id_++;
-        planNextWaypoint(wps_[wp_id_]);
+        planNextWaypoint(wps_[wp_id_]); // 规划下一个路标点
       }
-      else if ((local_target_pt_ - end_pt_).norm() < 1e-3) // close to the global target
+      else if ((local_target_pt_ - end_pt_).norm() < 1e-3) // close to the global target 局部终点和全局终点非常接近( < (1e-3)m)
       {
-        if (t_cur > info->duration_ - 1e-2)
+        if (t_cur > info->duration_ - 1e-2) // 如果当前时间大于局部轨迹的总时间
         {
-          have_target_ = false;
+          //* 已经到达目标点了
+          have_target_ = false; // 标志位复位
           have_trigger_ = false;
 
-          if (target_type_ == TARGET_TYPE::PRESET_TARGET)
+          if (target_type_ == TARGET_TYPE::PRESET_TARGET)   // 如果是预设点模式
           {
             wp_id_ = 0;
-            planNextWaypoint(wps_[wp_id_]);
+            planNextWaypoint(wps_[wp_id_]); // 返回第一个路标点
           }
 
-          changeFSMExecState(WAIT_TARGET, "FSM");
-          goto force_return;
+          changeFSMExecState(WAIT_TARGET, "FSM");   // EXEC_TRAJ --> WAIT_TARGET
+          goto force_return;    // 退出
           // return;
         }
-        else if ((end_pt_ - pos).norm() > no_replan_thresh_ && t_cur > replan_thresh_)
+        else if ((end_pt_ - pos).norm() > no_replan_thresh_ && t_cur > replan_thresh_)  //当前位置与end_pt_小于"停止重规划距离阈值"(no_replan_thresh)，且当前时间大于"重规划时间阈值"replan_thresh_
         {
-          changeFSMExecState(REPLAN_TRAJ, "FSM");
+          changeFSMExecState(REPLAN_TRAJ, "FSM");   // EXEC_TRAJ --> REPLAN_TRAJ
         }
       }
-      else if (t_cur > replan_thresh_)
+      else if (t_cur > replan_thresh_)  // 虽然局部终点和全局终点还有一段距离，但是当前时间 t_cur_ > 重规划时间阈值replan_thresh_
       {
-        changeFSMExecState(REPLAN_TRAJ, "FSM");
+        changeFSMExecState(REPLAN_TRAJ, "FSM"); // EXEC_TRAJ --> REPLAN_TRAJ
       }
 
       break;
@@ -644,7 +663,7 @@ namespace ego_planner
     }
 
     data_disp_.header.stamp = ros::Time::now();
-    data_disp_pub_.publish(data_disp_);
+    data_disp_pub_.publish(data_disp_);     // 可视化
 
   force_return:;
     exec_timer_.start();
