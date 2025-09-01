@@ -108,7 +108,7 @@ namespace ego_planner
   }
 
   /**
-   * @brief: 读取并处理yaml参数文件中预设好的 waypoints，从第一个开始轨迹规划
+   * @brief: 在预设点模式下调用，读取并处理yaml参数文件中预设好的 waypoints，从第一个开始轨迹规划
    * @return {*}
    */
   void EGOReplanFSM::readGivenWps()
@@ -256,6 +256,11 @@ namespace ego_planner
     planNextWaypoint(end_wp);
   }
 
+  /**
+   * @brief: 订阅Odometry的回调函数，记录Odometry的位置、速度、角度到 odom_pos_
+   * @param {OdometryConstPtr} &msg Odometry话题消息
+   * @return {*}
+   */
   void EGOReplanFSM::odometryCallback(const nav_msgs::OdometryConstPtr &msg)
   {
     odom_pos_(0) = msg->pose.pose.position.x;
@@ -446,7 +451,7 @@ namespace ego_planner
   {
 
     if (new_state == exec_state_)
-      continously_called_times_++;
+      continously_called_times_++;  // 如果新的控制周期的状态与上一个周期的状态相同，则递增。为了记录在该状态保持了多少个（连续的）周期
     else
       continously_called_times_ = 1;
 
@@ -456,13 +461,17 @@ namespace ego_planner
     cout << "[" + pos_call + "]: from " + state_str[pre_s] + " to " + state_str[int(new_state)] << endl;
   }
 
+  /**
+   * @brief: 一个小工具方法，返回 (continously_called_times_, exec_state_) 组成的 std::pair，
+   * @return {std::pair<int, EGOReplanFSM::FSM_EXEC_STATE>}
+   */
   std::pair<int, EGOReplanFSM::FSM_EXEC_STATE> EGOReplanFSM::timesOfConsecutiveStateCalls()
   {
     return std::pair<int, FSM_EXEC_STATE>(continously_called_times_, exec_state_);
   }
 
   /**
-   * @brief: 打印状态机当前所处的的状态
+   * @brief: cout打印状态机当前所处的的状态
    * @return {*}
    */
   void EGOReplanFSM::printFSMExecState()
@@ -520,6 +529,8 @@ namespace ego_planner
         // }
         // else
         // {
+        //* 只有在预设目标点模式时才会进入到该状态（集群一定是预设点模式）。
+        //* 在选点模式下，rviz中设定目标后，waypointCallback 调用 planNextWaypoint 就直接切换到 GEN_NEW_TRAJ 了
         changeFSMExecState(SEQUENTIAL_START, "FSM");    // WAIT_TARGET --> SEQUENTIAL_START
         // }
       }
@@ -604,7 +615,7 @@ namespace ego_planner
 
       Eigen::Vector3d pos = info->position_traj_.evaluateDeBoorT(t_cur);    // 计算t_cur时刻局部轨迹期望的位置坐标 pos
 
-      // 预设点模式，且 1.没规划完最后一个点，2.当前位置距离end_pt_小于停止重规划距离阈值(no_replan_thresh)
+      //* 预设点模式，且 1.没规划完最后一个点，2.当前位置距离end_pt_小于停止重规划距离阈值(no_replan_thresh)
       /* && (end_pt_ - pos).norm() < 0.5 */
       if ((target_type_ == TARGET_TYPE::PRESET_TARGET) &&
           (wp_id_ < waypoint_num_ - 1) &&
