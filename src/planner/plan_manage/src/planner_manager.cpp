@@ -454,6 +454,16 @@ namespace ego_planner
     return true;
   }
 
+    /**
+   * @brief: generate global reference trajectory
+   * @param {Vector3d} &start_pos
+   * @param {Vector3d} &start_vel
+   * @param {Vector3d} &start_acc
+   * @param {Vector3d} &end_pos
+   * @param {Vector3d} &end_vel
+   * @param {Vector3d} &end_acc
+   * @return {*}
+   */
   bool EGOPlannerManager::planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel, const Eigen::Vector3d &start_acc,
                                          const Eigen::Vector3d &end_pos, const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc)
   {
@@ -461,6 +471,7 @@ namespace ego_planner
     // generate global reference trajectory
 
     vector<Eigen::Vector3d> points;
+    //* 首先将起点和终点加入到 points vector 中
     points.push_back(start_pos);
     points.push_back(end_pos);
 
@@ -468,20 +479,23 @@ namespace ego_planner
     vector<Eigen::Vector3d> inter_points;
     const double dist_thresh = 4.0;
 
+    //* 遍历当前所有的路径点，如果两个点之间的距离太远，就插入中间点。以直线段的形式
     for (size_t i = 0; i < points.size() - 1; ++i)
     {
       inter_points.push_back(points.at(i));
-      double dist = (points.at(i + 1) - points.at(i)).norm();
+      double dist = (points.at(i + 1) - points.at(i)).norm();   // 两点之间的距离
 
+      //  如果两点之间的距离大于阈值
       if (dist > dist_thresh)
       {
-        int id_num = floor(dist / dist_thresh) + 1;
+        int id_num = floor(dist / dist_thresh) + 1; // 每 dist_thresh 的距离内至少要有一个中间点，所以一共有 id_num 个
 
+        // 计算这 id_num 个中间点的坐标
         for (int j = 1; j < id_num; ++j)
         {
           Eigen::Vector3d inter_pt =
               points.at(i) * (1.0 - double(j) / id_num) + points.at(i + 1) * double(j) / id_num;
-          inter_points.push_back(inter_pt);
+          inter_points.push_back(inter_pt); // push 到 inter_points 中
         }
       }
     }
@@ -489,21 +503,25 @@ namespace ego_planner
     inter_points.push_back(points.back());
 
     // write position matrix
+    //* 将 inter_points 写成矩阵pos， pos 为3行，pt_num 列的矩阵。即每一列都是一个点的xyz三个坐标
     int pt_num = inter_points.size();
     Eigen::MatrixXd pos(3, pt_num);
     for (int i = 0; i < pt_num; ++i)
       pos.col(i) = inter_points[i];
 
+    // 为每段路径分配时间
     Eigen::Vector3d zero(0, 0, 0);
     Eigen::VectorXd time(pt_num - 1);
     for (int i = 0; i < pt_num - 1; ++i)
     {
-      time(i) = (pos.col(i + 1) - pos.col(i)).norm() / (pp_.max_vel_);
+      time(i) = (pos.col(i + 1) - pos.col(i)).norm() / (pp_.max_vel_);  // 分配的时间 = 该线段的距离 / 最大速度
     }
 
+    // 第一段和最后一段给两倍的时间（可能是考虑无人机需要加速起步和减速刹车）
     time(0) *= 2.0;
     time(time.rows() - 1) *= 2.0;
 
+    // 优化该轨迹，使之符合无人机的动力学。如果路径点pos的数量为3个及以上，则使用 minSnapTraj 优化轨迹。若仅有两个点，那就使用简单的 one_segment_traj_gen 进行优化
     PolynomialTraj gl_traj;
     if (pos.cols() >= 3)
       gl_traj = PolynomialTraj::minSnapTraj(pos, start_vel, end_vel, start_acc, end_acc, time);

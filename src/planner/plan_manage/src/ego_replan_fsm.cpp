@@ -179,6 +179,11 @@ namespace ego_planner
     // }
   }
 
+  /**
+   * @brief: 轨迹规划，主要是调用了planner_manager_->planGlobalTraj()
+   * @param {Vector3d} next_wp
+   * @return {*}
+   */
   void EGOReplanFSM::planNextWaypoint(const Eigen::Vector3d next_wp)
   {
     bool success = false;
@@ -238,13 +243,13 @@ namespace ego_planner
   }
 
   /**
-   * @brief: 收到 rviz 中选择目标点工具发布的 "/move_base_simple/goal" 话题后，开始轨迹规划
+   * @brief: 回调函数，订阅 rviz 中选择目标点工具发布的 "/move_base_simple/goal" 话题，开始轨迹规划
    * @param {PoseStampedPtr} &msg
    * @return {*}
    */
   void EGOReplanFSM::waypointCallback(const geometry_msgs::PoseStampedPtr &msg)
   {
-    if (msg->pose.position.z < -0.1)
+    if (msg->pose.position.z < -0.1)    // 目标点的高度小于 -0.1m 认为是设置不正确，退出
       return;
 
     cout << "Triggered!" << endl;
@@ -253,7 +258,7 @@ namespace ego_planner
 
     Eigen::Vector3d end_wp(msg->pose.position.x, msg->pose.position.y, 1.0);    // 目标点
 
-    planNextWaypoint(end_wp);
+    planNextWaypoint(end_wp);   // 以end_wp为终点进行轨迹规划
   }
 
   /**
@@ -680,6 +685,11 @@ namespace ego_planner
     exec_timer_.start();
   }
 
+  /**
+   * @brief: 从全局轨迹进行规划，主要是调用 callReboundReplan
+   * @param {int} trial_times   尝试调用 callReboundReplan 的最大次数
+   * @return {*}
+   */
   bool EGOReplanFSM::planFromGlobalTraj(const int trial_times /*=1*/) //zx-todo
   {
     start_pt_ = odom_pos_;
